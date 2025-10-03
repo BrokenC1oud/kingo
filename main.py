@@ -1,7 +1,7 @@
 import base64
-import datetime
 import logging
 import re
+from datetime import datetime
 from functools import cached_property
 from pprint import pprint
 from typing import Optional
@@ -64,7 +64,7 @@ class Announcement(BaseModel):
     title: str
     notice_id: int
     pinned: bool
-    date: datetime.datetime
+    date: datetime
 
 class ClassSchedule(BaseModel):
     day_of_week: int
@@ -247,4 +247,5 @@ if __name__ == "__main__":
         print("Login Successful")
     else:
         print("Login Failed")
-    pprint(kingo.schedule(school_year=2025, semester=0))
+    schedule = kingo.schedule(school_year=2025, semester=0)
+    pprint(schedule)
