@@ -1,6 +1,9 @@
+import base64
+import datetime
 import logging
 import re
 from functools import cached_property
+from pprint import pprint
 from typing import Optional
 
 import STPyV8
@@ -50,10 +53,26 @@ class MainInfo(BaseModel):
     school_code: int = Field(validation_alias=AliasChoices("G_SCHOOL_CODE"))
     school_name: str = Field(validation_alias=AliasChoices("G_SCHOOL_NAME"))
 
+    user_code: int = Field(validation_alias=AliasChoices("G_USER_CODE"))
+
 class KingoSignResult(BaseModel):
     message: str
     result: str
     status: int
+
+class Announcement(BaseModel):
+    title: str
+    notice_id: int
+    pinned: bool
+    date: datetime.datetime
+
+class ClassSchedule(BaseModel):
+    day_of_week: int
+    period: int
+    name: str
+    teacher: str
+    weeks: str
+    location: str
 
 class Kingo:
     def __init__(self, username: str = USERNAME, password: str = PASSWORD, domain: str = DOMAIN):
@@ -121,6 +140,93 @@ class Kingo:
         return main_info
 
 
+    @cached_property
+    def announcements(self) -> list[Announcement]:
+        bbs_school_notice = self.session.post(f"https://{self.domain}/cms/bbsSchoolNotice.action", params={"recordsPerPage": 8})
+
+        soup = BeautifulSoup(bbs_school_notice.text, "lxml")
+        announcements = []
+        rows = soup.select("#schoolnotice_div tbody tr")
+
+        for row in rows:
+            link = row.find('a')
+            if link:
+                title = link.get_text(strip=True)
+
+                onclick = link.get("href", "")
+                notice_id_match = re.search(r"toschoolnotice\('([^']+)'\)", onclick)
+                notice_id = notice_id_match.group(1) if notice_id_match else None
+
+                is_pinned = row.find('span', style=lambda x: x and 'color: red' in x) is not None
+
+                date_td = row.find_all('td')[1]
+                date = date_td.get_text(strip=True)
+
+                announcements.append(
+                    Announcement(
+                        title=title,
+                        notice_id=notice_id,
+                        pinned=is_pinned,
+                        date=date,
+                    )
+                )
+
+        return announcements
+
+
+    def schedule(self, school_year: int, semester: int) -> list[ClassSchedule]:
+        time_periods = {
+            '一': 1,
+            '二': 2,
+            '三': 3,
+            '四': 4,
+            '五': 5,
+        }
+        days = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
+
+        result: list[ClassSchedule] = []
+
+        schedule = self.session.get(f"https://{self.domain}/student/wsxk.xskcb10319.jsp",
+                                    params={"params": base64.b64encode(f"xn={school_year}&xq={semester}&xh={self.main_info.user_code}".encode("utf-8"))},
+                                    headers={"Referer": f"https://{self.domain}/student/xkjg.wdkb.jsp"})
+
+        soup = BeautifulSoup(schedule.text, "lxml")
+        main_table = soup.find("table", id="mytable")
+        if main_table:
+            rows = main_table.find("tbody").find_all("tr")
+            for row in rows[1:]:
+                cells = row.find_all("td", class_="td")
+
+                period_cell = row.find("td", class_="td1", rowspan=None)
+                if period_cell and period_cell.get_text(strip=True) in time_periods:
+                    period = time_periods[period_cell.get_text(strip=True)]
+                else:
+                    continue
+
+                for day_idx, cell in enumerate(cells):
+                    if day_idx >= len(days):
+                        break
+                    course_divs = cell.find_all("div", style=re.compile('padding-bottom'))
+
+                    for course_div in course_divs:
+                        course_text = course_div.get_text(strip=True)
+
+                        if course_text:
+                            lines = [line.strip() for line in course_div.stripped_strings]
+
+                            if len(lines) >= 3:
+                                result.append(ClassSchedule(
+                                    day_of_week=day_idx + 1,
+                                    period=period,
+                                    name=lines[0],
+                                    teacher=lines[1],
+                                    weeks=lines[2],
+                                    location=lines[3] if len(lines) > 3 else '',
+                                ))
+
+        return result
+
+
     @staticmethod
     def get_t(source: str, url: str) -> Optional[str]:
         soup = BeautifulSoup(source, "lxml")
@@ -141,3 +247,4 @@ if __name__ == "__main__":
         print("Login Successful")
     else:
         print("Login Failed")
+    pprint(kingo.schedule(school_year=2025, semester=0))
